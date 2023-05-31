@@ -1,0 +1,440 @@
+---
+title: "An Analysis of /r/democrats and /r/republicans"
+author: "Quinn He"
+desription: "Final Project for Text as Data"
+date: "12/20/2022"
+format:
+  html:
+    toc: true
+    code-fold: true
+    code-copy: true
+    code-tools: true
+
+---
+
+```{r}
+#| label: setup
+#| warning: false
+
+library(tidyverse)
+library(RedditExtractoR)
+library(syuzhet)
+library(rvest)
+library(quanteda)
+library(quanteda.textplots)
+library(cleanNLP)
+library(readr)
+library(quanteda.dictionaries)
+library(quanteda.sentiment)
+library(tidytext)
+library(DT)
+library(quanteda.textstats)
+library(text2vec)
+library(stm)
+library(topicmodels)
+library(visNetwork)
+library(scales)
+library(igraph)
+library(topicmodels)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Introduction
+
+Social media offers users a platform for political discourse and discussion with people from all over the world or country. Facebook, Reddit, and Twitter are the primary social media platforms that all for the most text based posts. I chose to study political discourse on Reddit because subreddits, which are basically forums dedicated to a particular topic that users can join or "subscribe" to. In a subreddit, users can post any type of media they would like and other users comment their thoughts. It is a relatively straightforwards forum style website, and it allows users to post long form comments. Like any social media platform, there are users with non-serious comments that are can sometimes derail conversation, but other times users will post their serious thoughts, which then sparks comment threads and discussion. This reason is why I chose to study Reddit over other text based social media apps because Reddit enables long form discourse on specific posts within a subreddit's topic. 
+
+As stated in previous research, Reddit is not a great representation of the general public. It is a niche group, but users can have more in depth discussion than on Twitter. 
+
+## Data
+
+The two data sets I am using were collected using the RedditExtractoR package. I collected comments from /r/democrats and /r/republicans and stored them each as their own data set. The /r/democrats subreddit spans one year 11/08/2021 to 11/08/2022 with 26,764 comments and /r/republican is from 11/10/2021 to 11/06/2022 with 2054 comments. There is a large discrepancy between the data collected because /r/democrats is significantly larger than /r/republicans with almost 200,000 compared to 17,600 respectively. Traditionally, Reddit is seen as a more liberal platform, but may suggest the low number of members in /r/republicans. 
+
+The variables in each dataset include url, author, date, timestamp, score, upvotes, downvotes, golds, comment, comment_id. For the purpose of this research, many of these variables are not important, and I will be focusing on the text of the comment variable.  
+
+From here on wards, I refer to /r/democrats as "blue" and /r/republicans as "red" for ease of writing. 
+
+```{r}
+
+blue_comments <- read_csv("blue_commentsforfinal.csv")
+
+red_comments <- read_csv("red_commentsforfinal.csv")
+
+write_rds(blue_comments, "blue_comments.rda")
+write_rds(red_comments, "red_comments.rda")
+
+```
+
+#Methods
+
+## Pre-processing Subreddits
+
+Every post on political subreddits have an "AutoModerator" post a general comment that reminds users to act civily in conversation. This is extremely unuseful and would skew my data tremendously since for every post, there is one of these comments. I also remove any comments that are \[deleted\] or \[removed\] as a user's comment could have been deleted or removed by a moderator. 
+```{r}
+
+blue_comments <- blue_comments%>%
+  filter(!(comment %in% c("[removed]", "[deleted]"))) %>% 
+  filter(!(author %in% "AutoModerator"))
+
+red_comments <- red_comments %>% 
+  filter(!(comment %in% c("[removed]", "[deleted]")))%>% 
+  filter(!(author %in% "AutoModerator"))
+
+  
+```
+
+For each subreddit I must create a corpus, set of tokens, and a document feature matrix. I implement the standard preprocessing techniques by removing stopwords and other symbols, punctuation, numbers, etc. so only the necessary words for the analysis to measure political discourse. I chose not to stem the words because I did not see too much overlap of words with similar roots and I do not like using stemming for this type of analysis because I want to see the full word.  
+
+### /r/democrats
+```{r}
+
+blue_corpus <- corpus(blue_comments$comment)
+summary(blue_corpus)
+
+blue_tokens <- tokens(blue_corpus,
+                      remove_punct = T,
+                      remove_symbols = T,
+                      remove_url = T,
+                      remove_numbers = T)
+
+blue_tokens <- tokens_select(blue_tokens, 
+                             pattern = stopwords("en"), 
+                             selection = "remove" )
+
+#I remove words that dont have any meaning to me that were in the network cloud.
+
+blue_tokens <- tokens_remove(blue_tokens, c("back", "really", "less", "saying", "look", "like", "get", "every", "said", "anything", "s", "right", "now", "see", "t", "can"))
+
+print(blue_tokens)
+
+## Creating the Document Feature Matrix
+
+blue_dfm <- blue_tokens %>% 
+  tokens_tolower() %>% 
+  dfm() 
+
+blue_dfm <- dfm_trim(blue_dfm, min_termfreq = 5)
+```
+
+
+### /r/republicans
+```{r}
+
+red_corpus <- corpus(red_comments$comment)
+summary(red_corpus)
+
+red_tokens <- tokens(red_corpus,
+                      remove_punct = T,
+                      remove_symbols = T,
+                      remove_url = T,
+                      remove_numbers = T)
+
+red_tokens <- tokens_select(red_tokens, 
+                             pattern = stopwords("en"), 
+                             selection = "remove", )
+
+#I remove words that dont have any meaning to me that were in the network cloud.
+
+red_tokens <- tokens_remove(red_tokens, c("back", "really", "less", "saying", "look", "like", "get", "every", "said", "anything", "s", "right", "now", "see", "t", "can"))
+
+print(red_tokens)
+
+## Creating the Document Feature Matrix
+
+red_dfm <- red_tokens %>% 
+  tokens_tolower() %>% 
+  dfm() 
+
+red_dfm <- dfm_trim(red_dfm, min_termfreq = 5)
+```
+
+## Sentiment Analysis: NRC Dictionary 
+
+```{r}
+
+NRC_blue <- liwcalike(blue_corpus, data_dictionary_NRC)
+
+NRC_red <- liwcalike(red_corpus, data_dictionary_NRC)
+```
+
+
+### Polarity Measure: Blue
+
+```{r}
+
+NRC_blue$polarity <- NRC_blue$positive - NRC_blue$negative
+
+ggplot(NRC_blue)+
+  geom_histogram(aes(polarity))+
+  theme_bw() +
+  labs(title = "Polarity Measure in /r/democrats", x = "Polarity", y = "Count")
+
+mean(NRC_blue$polarity)
+mean(NRC_red$polarity)
+```
+
+Sentiment graph
+```{r}
+
+blue_facet <- blue_comments %>%
+  select(comment) %>%
+  unnest_tokens(word, comment)
+
+sent_words_blue <- blue_facet %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+```
+
+
+
+```{r}
+
+
+sent_words_blue %>%
+  group_by(sentiment) %>%
+  top_n(9) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(title = "Contribution of terms in /r/democrats with NRC sentiment",
+       y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+
+```
+
+
+### Polarity Measure: Red
+
+```{r}
+
+NRC_red$polarity <- NRC_red$positive - NRC_red$negative
+
+ggplot(NRC_red)+
+  geom_histogram(aes(polarity))+
+  theme_bw()+
+  labs(title = "Polarity Measure in /r/republicans", x = "Polarity", y = "Count")
+```
+
+```{r}
+
+red_facet <- red_comments %>%
+  select(comment) %>%
+  unnest_tokens(word, comment)
+
+word_counts_red <- red_facet %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+word_counts_red %>%
+  group_by(sentiment) %>%
+  top_n(9) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(title = "Contribution of terms in /r/republicans with NRC sentiment",
+       y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+
+```
+
+## Sentiment Analysis: Positive Negative Bing
+
+
+Republican
+```{r}
+
+red_facet2 <- red_comments %>%
+  select(comment) %>%
+  unnest_tokens(word, comment)
+
+word_counts_red2 <- red_facet2 %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+word_counts_red2 %>%
+  group_by(sentiment) %>%
+  top_n(9) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(title = "Contribution of terms in /r/republicans with Bing sentiment",
+       y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+
+
+
+```
+Democrat
+```{r}
+
+blue_facet2 <- blue_comments %>%
+  select(comment) %>%
+  unnest_tokens(word, comment)
+
+word_counts_blue2 <- blue_facet2 %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+word_counts_blue2 %>%
+  group_by(sentiment) %>%
+  top_n(9) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(title = "Contribution of terms in /r/democrats with Bing sentiment",
+       y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+
+
+
+```
+
+## Zipf's Law: Text Representation
+
+### Blue
+```{r}
+
+word_counts <- as.data.frame(sort(colSums(blue_dfm),dec=T))
+colnames(word_counts) <- c("Frequency")
+word_counts$Rank <- c(1:ncol(blue_dfm))
+head(word_counts)
+
+```
+
+#### Red
+```{r}
+
+word_counts2 <- as.data.frame(sort(colSums(red_dfm),dec=T))
+colnames(word_counts2) <- c("Frequency")
+word_counts2$Rank <- c(1:ncol(red_dfm))
+head(word_counts2)
+
+```
+
+
+## Correlated Topic Models: /r/democrats
+
+```{r}
+
+k <- 10
+
+ctm_blue <- CTM(blue_dfm, 10, method = "VEM", control = NULL, model = "ctm")
+
+labelTopics(stm_blue)
+
+plot(ctm_blue, type = "summary", main = "Correlated Topic Model: /r/democrats")
+
+```
+
+## Correlated Topic Model: /r/republican
+
+```{r}
+
+k <- 5
+
+ctm_red <- stm(red_dfm,
+               K = k,
+               data = red_comments,
+               max.em.its = 1000,
+               seed = 1234,
+               init.type = "Spectral")
+
+
+labelTopics(ctm_red)
+
+plot(ctm_red, type = "summary", main = "Correlated Topic Model: /r/republicans")
+
+```
+
+
+## LDA: /r/democrats
+
+```{r}
+
+lda_model_blue <- stm(blue_dfm, K = 5, verbose = F, init.type = "LDA" )
+
+#summary(cor_top_model_blue)
+
+lda_model_red <- stm(red_dfm, K = 5, verbose = F, init.type = "LDA")
+```
+
+```{r}
+
+dem.topics <- tidy(lda_model_blue, matrix = "beta")
+
+dem.terms <- dem.topics %>% group_by(topic) %>% top_n(10, beta) %>% ungroup() %>% 
+    arrange(topic, -beta)
+
+dem.terms %>% mutate(term = reorder(term, beta)) %>% ggplot(aes(term, beta, fill = factor(topic))) + 
+    geom_col(show.legend = TRUE) + facet_wrap(~topic, scales = "free", labeller = "label_both") + 
+    xlab("Terms") + ylab("Topics") + coord_flip()+
+  labs(title = "Top Terms per Topic in /r/democrats with LDA Topic Modeling")
+```
+
+I'll get names for the topic models with the next function. While the names won't be super neat, ideal names, it will provide a quick and easy way to discern what topics are.
+
+```{r}
+
+labelTopics(top_model_blue)
+
+```
+
+Below are the top 5 documents in each of the 5 topics. I like this visualization because it's helpful to check back the above function and see the full context of the comments.
+
+```{r}
+
+findThoughts(cor_top_model_blue, texts = blue_comments$comment, topics = c(1:5), n = 1)
+
+```
+
+
+```{r}
+
+red.topics <- tidy(lda_model_red, matrix = "beta")
+
+red.terms <- red.topics %>% group_by(topic) %>% top_n(10, beta) %>% ungroup() %>% 
+    arrange(topic, -beta)
+
+red.terms %>% mutate(term = reorder(term, beta)) %>% ggplot(aes(term, beta, fill = factor(topic))) + 
+    geom_col(show.legend = TRUE) + facet_wrap(~topic, scales = "free", labeller = "label_both") + 
+    xlab("Terms") + ylab("Topics") + coord_flip()+
+  labs(title = "Top Terms per Topic in /r/republicans with LDA Topic Modeling")
+```
+## Limitations
+
+The main limitation with this study is the fact I had such an unbalanced data set between the two subreddits. /r/democrats had an exceptionally large set of comments compared to /r/republicans, which forced me to focus more on /r/democrats. In a future study, I would look for a right-wing subreddit that mirrors the amount of members as /r/democrats or combine multiple subreddits to get a data set that could rivial the membership numbers. 
+
+## Previous Research
+
+A Tale of Two Subreddits: https://ojs.aaai.org/index.php/ICWSM/article/view/19347/19119
+
+No echo in the chambers of political interactions on Reddit: https://www.nature.com/articles/s41598-021-81531-x
+
+Determining Presidential Approval Rating Using Reddit Sentiment Analysis: https://towardsdatascience.com/determining-presidential-approval-rating-using-reddit-sentiment-analysis-7912fdb5fcc7
+
+https://www.researchgate.net/publication/349794705_Populist_Supporters_on_Reddit_A_Comparison_of_Content_and_Behavioral_Patterns_Within_Publics_of_Supporters_of_Donald_Trump_and_Hillary_Clinton
+
+
+---
+title: "text_as_data_final"
+format: pdf
+editor: visual
+---
